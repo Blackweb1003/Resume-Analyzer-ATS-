@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ats-resume-analyzer-api
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: CORS_ORIGINS
+        sync: false
+      - key: EMBEDDING_MODEL_NAME
+        value: all-MiniLM-L6-v2
