@@ -58,7 +58,7 @@ function AnalyzerPage() {
             </h1>
             <p className="mt-4 text-base leading-7 text-slate-600">
               Compare a resume against a job description using keyword matching,
-              skill detection, and semantic similarity.
+              skill detection, semantic similarity, and contextual LLM analysis.
             </p>
           </div>
         </div>

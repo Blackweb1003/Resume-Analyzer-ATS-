@@ -8,7 +8,8 @@ def generate_suggestions(
     if missing_skills:
         top_missing = ", ".join(missing_skills[:6])
         suggestions.append(
-            f"Add relevant experience, projects, or certifications that demonstrate: {top_missing}."
+            "If you have truthful experience with these areas, make the evidence "
+            f"more explicit in your resume: {top_missing}."
         )
 
     if ats_score < 70:

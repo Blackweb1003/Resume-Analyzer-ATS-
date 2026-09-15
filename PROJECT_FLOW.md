@@ -7,6 +7,8 @@ ATS Resume Analyzer is a full-stack application that compares a candidate's PDF 
 The application produces:
 
 - An ATS compatibility score from 0 to 100
+- The existing objective score and component breakdown
+- Optional LLM contextual analysis when `OPENAI_API_KEY` is configured
 - Skills found in both the resume and job description
 - Skills required by the job description but not found in the resume
 - Technical skills detected in the resume
@@ -15,7 +17,7 @@ The application produces:
 The project has two applications:
 
 - **Frontend:** React with Vite, Axios, and Tailwind CSS
-- **Backend:** FastAPI with PyMuPDF, scikit-learn, and sentence-transformers
+- **Backend:** FastAPI with PyMuPDF, scikit-learn, sentence-transformers, and the OpenAI Responses API
 
 The browser never performs the resume analysis itself. It collects the inputs, sends them to the backend, and renders the backend response.
 
@@ -33,11 +35,15 @@ flowchart LR
     O --> S[Skill Matching]
     O --> K[Keyword Similarity]
     O --> E[Semantic Similarity]
+    O --> L[LLM Contextual Analysis]
     O --> G[Suggestion Generator]
+    O --> C[Combined Scoring Engine]
     S --> O
     K --> O
     E --> O
+    L --> O
     G --> O
+    C --> O
     O --> R[Pydantic AnalysisResponse]
     R -->|JSON| F
     F --> D[Result Dashboard]
@@ -52,9 +58,11 @@ The request path is:
 5. FastAPI validates the file and text.
 6. PyMuPDF extracts readable text from the PDF.
 7. The analysis service runs skill, keyword, and semantic comparisons.
-8. The backend creates suggestions.
-9. FastAPI validates the response against a Pydantic schema.
-10. React displays the score and analysis sections.
+8. The backend optionally calls the LLM once for structured contextual analysis.
+9. The backend combines objective and contextual scores in Python.
+10. The backend creates suggestions with LLM suggestions when available and rule-based suggestions as fallback.
+11. FastAPI validates the response against a Pydantic schema.
+12. React displays the score and analysis sections.
 
 ---
 
@@ -81,10 +89,12 @@ The request path is:
 | `backend/app/routes/resume_routes.py` | Handles HTTP input validation and endpoint behavior |
 | `backend/app/services/pdf_service.py` | Extracts text from PDF bytes |
 | `backend/app/services/analysis_service.py` | Coordinates the complete analysis |
-| `backend/app/services/scoring_service.py` | Calculates all score components and the final score |
+| `backend/app/services/scoring_service.py` | Calculates objective score components, LLM context score, and final score |
+| `backend/app/services/llm_service.py` | Calls OpenAI once for structured contextual analysis and handles fallback errors |
 | `backend/app/services/skill_service.py` | Detects known skills and compares skill sets |
 | `backend/app/services/suggestion_service.py` | Generates rule-based recommendations |
 | `backend/app/schemas/analysis_schema.py` | Defines the response contract |
+| `backend/app/schemas/llm_schema.py` | Defines and validates the LLM structured output contract |
 | `backend/app/utils/text_cleaner.py` | Normalizes text for matching |
 | `backend/app/utils/config.py` | Loads environment configuration |
 
@@ -286,9 +296,11 @@ The extracted resume text and the original job description then become the two i
 ```text
 resume_text + job_description
         |
-        +--> calculate_ats_score
+        +--> calculate_objective_score_breakdown
         +--> compare_skills
         +--> get_detected_resume_skills
+        +--> analyze_resume_context
+        +--> calculate_hybrid_ats_score
         +--> generate_suggestions
         |
         +--> AnalysisResponse
@@ -296,12 +308,15 @@ resume_text + job_description
 
 The sequence is:
 
-1. Calculate the final ATS score.
+1. Calculate the existing objective score and its skill, keyword, and semantic breakdown.
 2. Calculate matched and missing skills.
 3. Extract all known skills found in the resume.
-4. Generate suggestions using the score and skill lists.
-5. Construct an `AnalysisResponse` object.
-6. Return it to FastAPI.
+4. Try one structured OpenAI Responses API call for contextual analysis.
+5. If the LLM succeeds, calculate the contextual score and hybrid ATS score in Python.
+6. If the LLM fails or is not configured, fall back to the existing objective score.
+7. Merge LLM suggestions with deterministic rule-based suggestions.
+8. Construct an `AnalysisResponse` object.
+9. Return it to FastAPI.
 
 The route and service layers remain separate, which makes it easier to test analysis logic without creating an HTTP request.
 
@@ -379,7 +394,7 @@ Important interpretation:
 
 ## 12. ATS Score Calculation
 
-The final score combines three signals.
+The existing objective score combines three signals. This base engine is preserved and remains useful even when the LLM is unavailable.
 
 ### 12.1 Skill match score: 45 percent
 
@@ -427,12 +442,12 @@ The result is clamped to the range `0.0` through `1.0`.
 
 The model is cached with `@lru_cache(maxsize=1)`, so the model is loaded once per backend process and reused for later requests.
 
-### 12.4 Weighted final formula
+### 12.4 Weighted objective formula
 
 The implementation calculates:
 
 $$
-\text{weighted score} =
+\text{objective score} =
 (0.45 \times \text{skill score}) +
 (0.25 \times \text{keyword score}) +
 (0.30 \times \text{semantic score})
@@ -441,10 +456,10 @@ $$
 Then it clamps the result to `[0, 1]`, multiplies by 100, and rounds to an integer:
 
 $$
-\text{ATS score} = \operatorname{round}(100 \times \operatorname{clamp}(\text{weighted score}, 0, 1))
+\text{base score} = \operatorname{round}(100 \times \operatorname{clamp}(\text{objective score}, 0, 1))
 $$
 
-The score therefore always falls between 0 and 100.
+The base score therefore always falls between 0 and 100.
 
 Example:
 
@@ -453,28 +468,64 @@ skill score     = 0.80
 keyword score   = 0.60
 semantic score  = 0.90
 
-weighted score = (0.80 * 0.45) + (0.60 * 0.25) + (0.90 * 0.30)
-               = 0.78
+objective score = (0.80 * 0.45) + (0.60 * 0.25) + (0.90 * 0.30)
+                = 0.78
 
-ATS score      = round(0.78 * 100)
-               = 78
+base score      = round(0.78 * 100)
+                = 78
+```
+
+### 12.5 LLM contextual score
+
+When the OpenAI call succeeds, the LLM returns three normalized dimensions. The LLM does not return the final ATS score.
+
+```text
+LLM contextual score =
+  (contextual skill alignment * 0.50)
+  + (experience relevance * 0.30)
+  + (project relevance * 0.20)
+```
+
+These values are validated by Pydantic and clamped before scoring.
+
+### 12.6 Final hybrid score
+
+When LLM analysis is available:
+
+```text
+final score =
+  (objective score * 0.70)
+  + (LLM contextual score * 0.30)
+```
+
+The final result is clamped to `[0, 1]`, multiplied by 100, and rounded.
+
+When LLM analysis is unavailable:
+
+```text
+final score = base score
 ```
 
 ---
 
 ## 13. Suggestion Generation
 
-Suggestions are generated by rules in `suggestion_service.py`; they are not generated by a large language model.
+Suggestions are generated in two layers:
+
+- `llm_service.py` can return personalized suggestions grounded in the resume and job description.
+- `suggestion_service.py` always provides deterministic fallback suggestions.
+
+When LLM analysis is available, the analysis service merges LLM suggestions first and rule-based suggestions second, removing duplicates. When LLM analysis is unavailable, the frontend still receives the rule-based suggestions.
 
 Rules:
 
-1. If missing skills exist, suggest adding truthful experience, projects, or certifications demonstrating the first six missing skills.
+1. If missing skills exist, suggest making truthful existing evidence more explicit for the first six missing skills.
 2. If the ATS score is below 70, suggest mirroring relevant job-description wording.
 3. If the ATS score is below 70, suggest adding measurable impact such as percentages, revenue, time saved, or scale.
 4. If fewer than five skills matched, suggest creating a dedicated categorized Skills section.
 5. Always suggest ATS-friendly formatting: simple headings, no tables for core content, and a readable PDF.
 
-The suggestions are deterministic. The same score and skill lists produce the same suggestions.
+The rule-based suggestions are deterministic. The same score and skill lists produce the same fallback suggestions.
 
 ---
 
@@ -484,18 +535,41 @@ The backend returns an `AnalysisResponse` Pydantic object with:
 
 ```json
 {
-  "ats_score": 78,
+  "ats_score": 84,
+  "base_score": 78,
+  "skill_score": 80,
+  "keyword_score": 60,
+  "semantic_score": 90,
   "matched_skills": ["fastapi", "python", "sql"],
   "missing_skills": ["aws", "docker"],
   "detected_resume_skills": ["fastapi", "python", "react", "sql"],
+  "llm_analysis_available": true,
+  "llm_error": null,
+  "required_skills": ["python", "fastapi", "sql", "docker", "aws"],
+  "preferred_skills": ["kubernetes"],
+  "contextual_matched_skills": ["python", "fastapi", "backend api development"],
+  "contextual_missing_skills": ["aws deployment evidence"],
+  "skill_evidence": [
+    {
+      "skill": "fastapi",
+      "evidence": "Resume mentions a FastAPI backend project.",
+      "evidence_strength": "explicit"
+    }
+  ],
+  "experience_relevance": 80,
+  "project_relevance": 70,
+  "contextual_skill_alignment": 85,
+  "strengths": ["Backend API work aligns with the JD responsibilities."],
+  "weaknesses": ["Cloud deployment evidence is limited."],
   "suggestions": [
-    "Add relevant experience, projects, or certifications that demonstrate: aws, docker.",
+    "Make existing backend project impact more measurable.",
     "Keep formatting ATS-friendly: use simple headings, avoid tables for core content, and export as a readable PDF."
-  ]
+  ],
+  "llm_explanation": "The score combines strong backend alignment with weaker cloud evidence."
 }
 ```
 
-Pydantic enforces that `ats_score` is an integer between 0 and 100 and that all skill and suggestion fields are lists of strings.
+Pydantic enforces that score fields are integers between 0 and 100, LLM score dimensions are normalized before conversion, and all skill, evidence, and suggestion fields follow the declared schema.
 
 This schema acts as a contract between the backend and frontend. If the backend response does not match the schema, FastAPI reports a response validation error instead of silently returning an inconsistent structure.
 
@@ -515,12 +589,19 @@ After Axios resolves:
 - A result label
 - `Strong Match` when the score is at least 75
 - Otherwise `Needs Optimization`
-- The numerical ATS score
+- The numerical final ATS score
+- The base objective score
 - A progress bar
+- Objective breakdown: skill, keyword, and semantic scores
+- Contextual breakdown when LLM analysis is available
 - Matched skills
 - Missing skills
 - Detected resume skills
+- LLM required and preferred skills when available
+- Contextual matches and gaps when available
+- Strengths, weaknesses, and skill evidence when available
 - Improvement suggestions
+- A concise score explanation when available
 
 Before a result exists, the card shows an empty-state message instead.
 
@@ -543,12 +624,14 @@ Assume the user uploads `resume.pdf` and pastes a job description requiring Pyth
 9. The job description contains Python, FastAPI, SQL, Docker, and AWS.
 10. Matched skills become Python, FastAPI, and SQL.
 11. Missing skills become Docker and AWS.
-12. The scoring service calculates the 45/25/30 weighted score.
-13. The suggestion service recommends addressing Docker and AWS and improving resume evidence when appropriate.
-14. Pydantic validates the response object.
-15. FastAPI serializes it to JSON.
-16. Axios returns the JSON to React.
-17. The result card shows the score, skill tags, and suggestions.
+12. The scoring service calculates the 45/25/30 objective score.
+13. The LLM service tries one contextual analysis request if `OPENAI_API_KEY` is configured.
+14. The scoring service calculates the hybrid score if LLM analysis is available, or keeps the base score if it is not.
+15. Suggestions are merged from LLM and rule-based sources.
+16. Pydantic validates the response object.
+17. FastAPI serializes it to JSON.
+18. Axios returns the JSON to React.
+19. The result card shows the score, objective breakdown, contextual sections when available, skill tags, and suggestions.
 
 ---
 
@@ -564,6 +647,8 @@ Assume the user uploads `resume.pdf` and pastes a job description requiring Pyth
 | Image-only/scanned PDF | Backend text check | HTTP 400: no readable text extracted |
 | No usable keyword terms | Scoring service | Keyword similarity becomes 0.0 |
 | No recognized job skills | Scoring service | Skill score becomes 0.0 |
+| Missing OpenAI key or LLM failure | LLM service | Existing score is returned and `llm_analysis_available` is `false` |
+| Malformed LLM response | Pydantic validation | Existing score is returned and no raw model error is exposed |
 | API/network failure | Frontend catch block | Backend detail or generic error is displayed |
 | First semantic request is slow | Model loading | Model download/load occurs before scoring; later requests reuse it |
 
@@ -616,6 +701,9 @@ The backend normally uses:
 ```text
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_TIMEOUT_SECONDS=30
 ```
 
 ---
@@ -630,10 +718,12 @@ EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
 4. Upload a text-based PDF resume.
 5. Paste a job description containing known skills.
 6. Click Analyze Resume.
-7. Verify the score and all skill sections appear.
-8. Try an empty submission and verify the frontend validation.
-9. Try a non-PDF file and verify the backend error.
-10. Try a scanned PDF and verify the readable-text error.
+7. Verify the final score, base score, objective breakdown, and skill sections appear.
+8. With `OPENAI_API_KEY` configured, verify contextual breakdown, strengths, weaknesses, evidence, and explanation appear.
+9. Without `OPENAI_API_KEY`, verify the score still appears and contextual analysis is marked unavailable.
+10. Try an empty submission and verify the frontend validation.
+11. Try a non-PDF file and verify the backend error.
+12. Try a scanned PDF and verify the readable-text error.
 
 ### Direct API test
 
@@ -650,7 +740,12 @@ The smallest high-value tests would cover:
 - `compare_skills`
 - `calculate_keyword_similarity`
 - `calculate_skill_match_score`
+- `calculate_objective_score_breakdown`
+- `calculate_llm_context_score`
+- `calculate_hybrid_ats_score`
 - `generate_suggestions`
+- LLM fallback when `OPENAI_API_KEY` is missing
+- LLM schema validation failure fallback
 - PDF error handling
 - The complete route response shape
 
@@ -666,6 +761,9 @@ The semantic model can be mocked in unit tests so tests do not download a model 
 - Small route layer with business logic moved into services
 - Typed response contract using Pydantic
 - Multiple scoring signals instead of exact keyword matching only
+- LLM context improves synonyms, evidence, strengths, weaknesses, and personalized suggestions
+- Final score remains controlled by backend Python code
+- LLM failures fall back to the existing objective score
 - Cached embedding model to avoid loading it for every request
 - Useful validation and user-facing error messages
 - No permanent resume storage in the current request flow
@@ -677,9 +775,11 @@ The semantic model can be mocked in unit tests so tests do not download a model 
 - The upload is read fully into memory, so large-file limits should be added for production.
 - The semantic model can make the first request slow and can require significant memory.
 - There is no authentication, user history, database, or saved analysis record.
-- Suggestions are rule-based and do not deeply understand a candidate's experience.
+- LLM suggestions depend on OpenAI API availability and quality of extracted resume text.
+- The LLM can improve context but is still constrained by the supplied resume/JD and validation schema.
 - Skill presence does not prove skill proficiency or actual experience.
 - The score is an application-specific indicator, not the score of a real employer's ATS.
+- The default final weights are heuristic and should be calibrated with labeled outcomes for production.
 - The current implementation checks the declared MIME type; production systems may also inspect file signatures and enforce size limits.
 
 Possible future improvements include OCR, a configurable skill taxonomy, file-size limits, asynchronous/background processing, persistent analysis history, authentication, more robust PDF security checks, and calibrated scoring with labeled examples.
@@ -688,7 +788,7 @@ Possible future improvements include OCR, a configurable skill taxonomy, file-si
 
 ## 21. Interview Explanation: Short Version
 
-> This is a React and FastAPI ATS resume analyzer. The user uploads a PDF and enters a job description in the React frontend. React stores both values, validates that they are present, and sends them as multipart form data to `POST /api/v1/analyze`. FastAPI validates the file type and description, reads the PDF bytes, and uses PyMuPDF to extract text. The analysis service then coordinates three scoring signals: dictionary-based skill overlap weighted at 45%, TF-IDF-like count-vector keyword cosine similarity weighted at 25%, and sentence-transformer semantic similarity weighted at 30%. It also produces matched skills, missing skills, detected resume skills, and rule-based suggestions. A Pydantic response schema validates the result, FastAPI returns JSON, and React renders the score and recommendations. The main limitations are the fixed skill dictionary, lack of OCR, and the memory/startup cost of the embedding model.
+> This is a React and FastAPI hybrid ATS resume analyzer. The user uploads a PDF and enters a job description in the React frontend. React sends both values as multipart form data to `POST /api/v1/analyze`. FastAPI validates the inputs, extracts text with PyMuPDF, then runs the existing objective engine: dictionary skill overlap weighted at 45%, count-vector keyword cosine similarity weighted at 25%, and sentence-transformer semantic similarity weighted at 30%. The backend optionally calls OpenAI once for structured contextual analysis, validates that response with Pydantic, and computes the final score in Python as 70% objective score plus 30% LLM contextual score. If OpenAI is unavailable, the app falls back to the existing objective score. React renders the final score, objective breakdown, contextual sections when available, skills, and recommendations.
 
 Note: the implementation uses `CountVectorizer`, not TF-IDF weighting. In an interview, describe it accurately as count-vector or bag-of-words n-gram cosine similarity unless the implementation is changed.
 
@@ -710,7 +810,7 @@ Routes should handle HTTP concerns. Services should handle reusable business log
 
 ### How is the ATS score calculated?
 
-It is a weighted combination of skill match, keyword cosine similarity, and semantic embedding similarity. The weights are 45%, 25%, and 30% respectively, and the final value is converted to 0 to 100.
+The base score is a weighted combination of skill match, keyword cosine similarity, and semantic embedding similarity. The weights are 45%, 25%, and 30%. When LLM analysis is available, the final score is 70% base objective score and 30% contextual score. The LLM never directly returns the final score.
 
 ### What is the difference between keyword and semantic similarity?
 
@@ -726,7 +826,7 @@ PyMuPDF may extract no text. The route returns an error because OCR is not curre
 
 ### Is this really an AI system?
 
-It combines deterministic rules and machine learning. Skill extraction and suggestions are rule-based; semantic similarity uses a pretrained sentence-transformer model.
+It combines deterministic rules, machine learning, and an optional LLM layer. Skill extraction is dictionary-based, semantic similarity uses a pretrained sentence-transformer model, and the OpenAI layer adds structured contextual analysis when configured.
 
 ### What does CORS solve?
 
