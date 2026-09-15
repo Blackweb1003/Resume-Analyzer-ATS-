@@ -6,4 +6,4 @@ sentence-transformers==3.3.1
 python-multipart==0.0.20
 python-dotenv==1.0.1
 pydantic==2.13.4
-openai>=1.99.0,<3.0.0
+google-genai>=1.0.0,<2.0.0

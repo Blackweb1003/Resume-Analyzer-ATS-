@@ -63,26 +63,7 @@ JOB DESCRIPTION:
 
 
 def _extract_output_text(response: object) -> str:
-    output_text = getattr(response, "output_text", None)
-    if output_text:
-        return output_text
-
-    output_items = getattr(response, "output", None) or []
-    text_parts: list[str] = []
-
-    for item in output_items:
-        content_items = getattr(item, "content", None)
-        if isinstance(item, dict):
-            content_items = item.get("content")
-
-        for content in content_items or []:
-            text = getattr(content, "text", None)
-            if isinstance(content, dict):
-                text = content.get("text")
-            if text:
-                text_parts.append(text)
-
-    return "\n".join(text_parts).strip()
+    return (getattr(response, "text", None) or "").strip()
 
 
 def analyze_resume_context(
@@ -90,44 +71,29 @@ def analyze_resume_context(
     resume_text: str,
     job_description: str,
 ) -> tuple[LLMAnalysisResponse | None, str | None]:
-    if not settings.openai_api_key:
+    if not settings.google_api_key:
         return None, GENERIC_LLM_ERROR
 
     try:
-        from openai import OpenAI
+        from google import genai
+        from google.genai import types
 
-        client = OpenAI(
-            api_key=settings.openai_api_key,
-            timeout=settings.openai_timeout_seconds,
+        client = genai.Client(
+            api_key=settings.google_api_key,
+            http_options=types.HttpOptions(
+                timeout=int(settings.llm_timeout_seconds * 1000),
+            ),
         )
-        response = client.responses.create(
-            model=settings.openai_model,
-            instructions=SYSTEM_PROMPT,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": _build_user_prompt(resume_text, job_description),
-                        }
-                    ],
-                }
-            ],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "resume_contextual_analysis",
-                    "strict": True,
-                    "schema": LLMAnalysisResponse.model_json_schema(),
-                }
-            },
-            max_output_tokens=2500,
-            truncation="auto",
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=_build_user_prompt(resume_text, job_description),
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=LLMAnalysisResponse,
+                max_output_tokens=2500,
+            ),
         )
-
-        if getattr(response, "status", "completed") != "completed":
-            return None, GENERIC_LLM_ERROR
 
         output_text = _extract_output_text(response)
         if not output_text:

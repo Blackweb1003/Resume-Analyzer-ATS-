@@ -8,7 +8,7 @@ The application produces:
 
 - An ATS compatibility score from 0 to 100
 - The existing objective score and component breakdown
-- Optional LLM contextual analysis when `OPENAI_API_KEY` is configured
+- Optional LLM contextual analysis when `GOOGLE_API_KEY` is configured
 - Skills found in both the resume and job description
 - Skills required by the job description but not found in the resume
 - Technical skills detected in the resume
@@ -17,7 +17,7 @@ The application produces:
 The project has two applications:
 
 - **Frontend:** React with Vite, Axios, and Tailwind CSS
-- **Backend:** FastAPI with PyMuPDF, scikit-learn, sentence-transformers, and the OpenAI Responses API
+- **Backend:** FastAPI with PyMuPDF, scikit-learn, sentence-transformers, and the Google Gemini API
 
 The browser never performs the resume analysis itself. It collects the inputs, sends them to the backend, and renders the backend response.
 
@@ -90,7 +90,7 @@ The request path is:
 | `backend/app/services/pdf_service.py` | Extracts text from PDF bytes |
 | `backend/app/services/analysis_service.py` | Coordinates the complete analysis |
 | `backend/app/services/scoring_service.py` | Calculates objective score components, LLM context score, and final score |
-| `backend/app/services/llm_service.py` | Calls OpenAI once for structured contextual analysis and handles fallback errors |
+| `backend/app/services/llm_service.py` | Calls Google Gemini once for structured contextual analysis and handles fallback errors |
 | `backend/app/services/skill_service.py` | Detects known skills and compares skill sets |
 | `backend/app/services/suggestion_service.py` | Generates rule-based recommendations |
 | `backend/app/schemas/analysis_schema.py` | Defines the response contract |
@@ -311,7 +311,7 @@ The sequence is:
 1. Calculate the existing objective score and its skill, keyword, and semantic breakdown.
 2. Calculate matched and missing skills.
 3. Extract all known skills found in the resume.
-4. Try one structured OpenAI Responses API call for contextual analysis.
+4. Try one structured Google Gemini API call for contextual analysis.
 5. If the LLM succeeds, calculate the contextual score and hybrid ATS score in Python.
 6. If the LLM fails or is not configured, fall back to the existing objective score.
 7. Merge LLM suggestions with deterministic rule-based suggestions.
@@ -477,7 +477,7 @@ base score      = round(0.78 * 100)
 
 ### 12.5 LLM contextual score
 
-When the OpenAI call succeeds, the LLM returns three normalized dimensions. The LLM does not return the final ATS score.
+When the Google Gemini call succeeds, the LLM returns three normalized dimensions. The LLM does not return the final ATS score.
 
 ```text
 LLM contextual score =
@@ -625,7 +625,7 @@ Assume the user uploads `resume.pdf` and pastes a job description requiring Pyth
 10. Matched skills become Python, FastAPI, and SQL.
 11. Missing skills become Docker and AWS.
 12. The scoring service calculates the 45/25/30 objective score.
-13. The LLM service tries one contextual analysis request if `OPENAI_API_KEY` is configured.
+13. The LLM service tries one contextual analysis request if `GOOGLE_API_KEY` is configured.
 14. The scoring service calculates the hybrid score if LLM analysis is available, or keeps the base score if it is not.
 15. Suggestions are merged from LLM and rule-based sources.
 16. Pydantic validates the response object.
@@ -647,7 +647,7 @@ Assume the user uploads `resume.pdf` and pastes a job description requiring Pyth
 | Image-only/scanned PDF | Backend text check | HTTP 400: no readable text extracted |
 | No usable keyword terms | Scoring service | Keyword similarity becomes 0.0 |
 | No recognized job skills | Scoring service | Skill score becomes 0.0 |
-| Missing OpenAI key or LLM failure | LLM service | Existing score is returned and `llm_analysis_available` is `false` |
+| Missing Google key or LLM failure | LLM service | Existing score is returned and `llm_analysis_available` is `false` |
 | Malformed LLM response | Pydantic validation | Existing score is returned and no raw model error is exposed |
 | API/network failure | Frontend catch block | Backend detail or generic error is displayed |
 | First semantic request is slow | Model loading | Model download/load occurs before scoring; later requests reuse it |
@@ -701,9 +701,9 @@ The backend normally uses:
 ```text
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4.1-mini
-OPENAI_TIMEOUT_SECONDS=30
+GOOGLE_API_KEY=
+GEMINI_MODEL=gemini-2.0-flash
+LLM_TIMEOUT_SECONDS=30
 ```
 
 ---
@@ -719,8 +719,8 @@ OPENAI_TIMEOUT_SECONDS=30
 5. Paste a job description containing known skills.
 6. Click Analyze Resume.
 7. Verify the final score, base score, objective breakdown, and skill sections appear.
-8. With `OPENAI_API_KEY` configured, verify contextual breakdown, strengths, weaknesses, evidence, and explanation appear.
-9. Without `OPENAI_API_KEY`, verify the score still appears and contextual analysis is marked unavailable.
+8. With `GOOGLE_API_KEY` configured, verify contextual breakdown, strengths, weaknesses, evidence, and explanation appear.
+9. Without `GOOGLE_API_KEY`, verify the score still appears and contextual analysis is marked unavailable.
 10. Try an empty submission and verify the frontend validation.
 11. Try a non-PDF file and verify the backend error.
 12. Try a scanned PDF and verify the readable-text error.
@@ -744,7 +744,7 @@ The smallest high-value tests would cover:
 - `calculate_llm_context_score`
 - `calculate_hybrid_ats_score`
 - `generate_suggestions`
-- LLM fallback when `OPENAI_API_KEY` is missing
+- LLM fallback when `GOOGLE_API_KEY` is missing
 - LLM schema validation failure fallback
 - PDF error handling
 - The complete route response shape
@@ -775,7 +775,7 @@ The semantic model can be mocked in unit tests so tests do not download a model 
 - The upload is read fully into memory, so large-file limits should be added for production.
 - The semantic model can make the first request slow and can require significant memory.
 - There is no authentication, user history, database, or saved analysis record.
-- LLM suggestions depend on OpenAI API availability and quality of extracted resume text.
+- LLM suggestions depend on Google Gemini API availability and quality of extracted resume text.
 - The LLM can improve context but is still constrained by the supplied resume/JD and validation schema.
 - Skill presence does not prove skill proficiency or actual experience.
 - The score is an application-specific indicator, not the score of a real employer's ATS.
@@ -788,7 +788,7 @@ Possible future improvements include OCR, a configurable skill taxonomy, file-si
 
 ## 21. Interview Explanation: Short Version
 
-> This is a React and FastAPI hybrid ATS resume analyzer. The user uploads a PDF and enters a job description in the React frontend. React sends both values as multipart form data to `POST /api/v1/analyze`. FastAPI validates the inputs, extracts text with PyMuPDF, then runs the existing objective engine: dictionary skill overlap weighted at 45%, count-vector keyword cosine similarity weighted at 25%, and sentence-transformer semantic similarity weighted at 30%. The backend optionally calls OpenAI once for structured contextual analysis, validates that response with Pydantic, and computes the final score in Python as 70% objective score plus 30% LLM contextual score. If OpenAI is unavailable, the app falls back to the existing objective score. React renders the final score, objective breakdown, contextual sections when available, skills, and recommendations.
+> This is a React and FastAPI hybrid ATS resume analyzer. The user uploads a PDF and enters a job description in the React frontend. React sends both values as multipart form data to `POST /api/v1/analyze`. FastAPI validates the inputs, extracts text with PyMuPDF, then runs the existing objective engine: dictionary skill overlap weighted at 45%, count-vector keyword cosine similarity weighted at 25%, and sentence-transformer semantic similarity weighted at 30%. The backend optionally calls Google Gemini once for structured contextual analysis, validates that response with Pydantic, and computes the final score in Python as 70% objective score plus 30% LLM contextual score. If Google Gemini is unavailable, the app falls back to the existing objective score. React renders the final score, objective breakdown, contextual sections when available, skills, and recommendations.
 
 Note: the implementation uses `CountVectorizer`, not TF-IDF weighting. In an interview, describe it accurately as count-vector or bag-of-words n-gram cosine similarity unless the implementation is changed.
 
@@ -826,7 +826,7 @@ PyMuPDF may extract no text. The route returns an error because OCR is not curre
 
 ### Is this really an AI system?
 
-It combines deterministic rules, machine learning, and an optional LLM layer. Skill extraction is dictionary-based, semantic similarity uses a pretrained sentence-transformer model, and the OpenAI layer adds structured contextual analysis when configured.
+It combines deterministic rules, machine learning, and an optional LLM layer. Skill extraction is dictionary-based, semantic similarity uses a pretrained sentence-transformer model, and the Google Gemini layer adds structured contextual analysis when configured.
 
 ### What does CORS solve?
 

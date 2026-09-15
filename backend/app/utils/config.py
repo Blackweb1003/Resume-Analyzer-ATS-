@@ -10,9 +10,9 @@ load_dotenv()
 class Settings:
     cors_origins: list[str]
     embedding_model_name: str
-    openai_api_key: str | None
-    openai_model: str
-    openai_timeout_seconds: float
+    google_api_key: str | None
+    gemini_model: str
+    llm_timeout_seconds: float
     llm_max_resume_chars: int
     llm_max_job_description_chars: int
 
@@ -30,9 +30,9 @@ class Settings:
             "EMBEDDING_MODEL_NAME",
             "all-MiniLM-L6-v2",
         )
-        self.openai_api_key = os.getenv("OPENAI_API_KEY") or None
-        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-        self.openai_timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
+        self.google_api_key = os.getenv("GOOGLE_API_KEY") or None
+        self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self.llm_timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
         self.llm_max_resume_chars = int(os.getenv("LLM_MAX_RESUME_CHARS", "20000"))
         self.llm_max_job_description_chars = int(
             os.getenv("LLM_MAX_JOB_DESCRIPTION_CHARS", "12000")

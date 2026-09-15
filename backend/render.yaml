@@ -10,7 +10,7 @@ services:
         sync: false
       - key: EMBEDDING_MODEL_NAME
         value: all-MiniLM-L6-v2
-      - key: OPENAI_API_KEY
+      - key: GOOGLE_API_KEY
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-4.1-mini
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash

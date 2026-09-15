@@ -1,6 +1,6 @@
 # ATS Resume Analyzer
 
-Complete full-stack hybrid ATS Resume Analyzer built with FastAPI, React, Tailwind CSS, PyMuPDF, scikit-learn, sentence-transformers, and the OpenAI Responses API.
+Complete full-stack hybrid ATS Resume Analyzer built with FastAPI, React, Tailwind CSS, PyMuPDF, scikit-learn, sentence-transformers, and the Google Gemini API.
 
 ## 1. What This Project Does
 
@@ -120,7 +120,7 @@ The first run may take longer because `sentence-transformers` downloads the `all
 4. `analysis_service.py` coordinates the analysis.
 5. `skill_service.py` extracts known technical skills and finds matched/missing skills.
 6. `scoring_service.py` calculates keyword similarity, semantic similarity, skill match score, and the final Python-controlled score.
-7. `llm_service.py` optionally calls OpenAI once for structured contextual analysis.
+7. `llm_service.py` optionally calls Google Gemini once for structured contextual analysis.
 8. `suggestion_service.py` creates fallback rule-based improvement suggestions.
 9. FastAPI returns JSON to the frontend.
 
@@ -214,8 +214,8 @@ Test in the browser:
 3. Paste a real job description.
 4. Click `Analyze Resume`.
 5. Confirm that score, objective breakdown, skills, and suggestions appear.
-6. If `OPENAI_API_KEY` is configured, confirm the contextual breakdown appears.
-7. If `OPENAI_API_KEY` is missing, confirm the app still returns the base score with contextual analysis marked unavailable.
+6. If `GOOGLE_API_KEY` is configured, confirm the contextual breakdown appears.
+7. If `GOOGLE_API_KEY` is missing, confirm the app still returns the base score with contextual analysis marked unavailable.
 
 Test API directly in Swagger:
 
@@ -257,7 +257,7 @@ final ATS score =
   + (LLM contextual score * 30%)
 ```
 
-If the LLM is unavailable, times out, returns malformed data, or `OPENAI_API_KEY` is missing, the app falls back to the existing objective score and returns:
+If the LLM is unavailable, times out, returns malformed data, or `GOOGLE_API_KEY` is missing, the app falls back to the existing objective score and returns:
 
 ```json
 {
@@ -268,7 +268,7 @@ If the LLM is unavailable, times out, returns malformed data, or `OPENAI_API_KEY
 
 The LLM does not produce the final score. It only returns structured context such as required skills, preferred skills, evidence, strengths, weaknesses, relevance dimensions, and suggestions.
 
-The LLM was added to improve context that fixed dictionaries and keyword overlap miss: synonyms, related responsibilities, project relevance, skill evidence, strengths, weaknesses, and personalized wording suggestions. It does not replace PDF extraction, deterministic skill matching, keyword similarity, semantic similarity, or the backend scoring engine. All OpenAI communication lives in `backend/app/services/llm_service.py`, and the response is validated with Pydantic before it can influence scoring.
+The LLM was added to improve context that fixed dictionaries and keyword overlap miss: synonyms, related responsibilities, project relevance, skill evidence, strengths, weaknesses, and personalized wording suggestions. It does not replace PDF extraction, deterministic skill matching, keyword similarity, semantic similarity, or the backend scoring engine. All Google Gemini communication lives in `backend/app/services/llm_service.py`, and the response is validated with Pydantic before it can influence scoring.
 
 ## 10. Environment Variables
 
@@ -277,9 +277,9 @@ Backend `.env`:
 ```env
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4.1-mini
-OPENAI_TIMEOUT_SECONDS=30
+GOOGLE_API_KEY=
+GEMINI_MODEL=gemini-2.0-flash
+LLM_TIMEOUT_SECONDS=30
 ```
 
 Frontend `.env`:
@@ -288,7 +288,7 @@ Frontend `.env`:
 VITE_API_BASE_URL=http://localhost:8000/api/v1
 ```
 
-In production, `CORS_ORIGINS` must contain your Vercel frontend URL, and `VITE_API_BASE_URL` must contain your Render backend API URL with `/api/v1`. Never expose `OPENAI_API_KEY` in frontend code or Vercel frontend environment variables.
+In production, `CORS_ORIGINS` must contain your Vercel frontend URL, and `VITE_API_BASE_URL` must contain your Render backend API URL with `/api/v1`. Never expose `GOOGLE_API_KEY` in frontend code or Vercel frontend environment variables.
 
 ## 11. Deploy Backend to Render
 
@@ -318,8 +318,8 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```env
 CORS_ORIGINS=https://your-vercel-app.vercel.app
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-OPENAI_API_KEY=your-backend-only-key
-OPENAI_MODEL=gpt-4.1-mini
+GOOGLE_API_KEY=your-backend-only-key
+GEMINI_MODEL=gemini-2.0-flash
 ```
 
 8. Deploy and copy the Render backend URL.
@@ -370,7 +370,7 @@ VITE_API_BASE_URL=https://your-render-service.onrender.com/api/v1
 
 `Frontend cannot connect`: Check `VITE_API_BASE_URL` and confirm it ends with `/api/v1`.
 
-`Contextual analysis temporarily unavailable`: Confirm `OPENAI_API_KEY` is configured on the backend and that the selected `OPENAI_MODEL` supports the Responses API with structured output.
+`Contextual analysis temporarily unavailable`: Confirm `GOOGLE_API_KEY` is configured on the backend and that the selected `GEMINI_MODEL` supports structured JSON output.
 
 ## 14. Future Improvements
 
@@ -388,4 +388,4 @@ Add resume section checks for summary, work experience, education, skills, proje
 
 ## 15. Resume-Ready Project Description
 
-Built a full-stack hybrid ATS Resume Analyzer using FastAPI, React, Tailwind CSS, PyMuPDF, scikit-learn, sentence-transformers, and the OpenAI Responses API. Implemented PDF resume parsing, deterministic ATS scoring, contextual LLM analysis with fallback behavior, skill gap detection, semantic similarity scoring, personalized suggestions, responsive UI, and deployment-ready configuration for Render and Vercel.
+Built a full-stack hybrid ATS Resume Analyzer using FastAPI, React, Tailwind CSS, PyMuPDF, scikit-learn, sentence-transformers, and the Google Gemini API. Implemented PDF resume parsing, deterministic ATS scoring, contextual LLM analysis with fallback behavior, skill gap detection, semantic similarity scoring, personalized suggestions, responsive UI, and deployment-ready configuration for Render and Vercel.
